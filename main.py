@@ -11,6 +11,7 @@ Endpoints required by OpenEnv spec + competition:
 """
 
 from __future__ import annotations
+from typing import Optional
 
 import subprocess
 import sys
@@ -52,13 +53,16 @@ def root():
 # ---------------------------------------------------------------------------
 
 @app.post("/reset", response_model=Observation)
-def reset(req: ResetRequest) -> Observation:
+def reset(req: Optional[ResetRequest] = None) -> Observation:
     """
     Start a new episode for task_id (1, 2, or 3).
     Returns the initial observation.
     """
     try:
-        obs = _env.reset(task_id=req.task_id, seed=req.seed)
+        task_id = req.task_id if req else 1
+        seed = req.seed if req else 42
+
+        obs = _env.reset(task_id=task_id, seed=seed)
         return obs
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
