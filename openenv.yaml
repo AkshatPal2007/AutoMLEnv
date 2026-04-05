@@ -1,0 +1,81 @@
+name: automlenv
+version: "1.0.0"
+description: >
+  OpenEnv-compliant environment where an LLM agent debugs broken
+  ML pipelines. Features partial observability, deceptive signals,
+  dense reward shaping, and 3 difficulty-graded tasks.
+
+tags:
+  - openenv
+  - ml-debugging
+  - real-world
+  - agentic
+
+tasks:
+  - id: 1
+    name: "Fix the Broken Preprocessor"
+    difficulty: easy
+    task_type: classification
+    score_range: [0.0, 1.0]
+
+  - id: 2
+    name: "Fix and Optimize a Failing Pipeline"
+    difficulty: medium
+    task_type: classification
+    score_range: [0.0, 1.0]
+
+  - id: 3
+    name: "End-to-End Pipeline Reconstruction"
+    difficulty: hard
+    task_type: regression
+    score_range: [0.0, 1.0]
+
+api:
+  reset:
+    method: POST
+    path: /reset
+    body:
+      task_id: int        # 1, 2, or 3
+      seed: int           # default 42 — controls dataset + bug injection
+
+  step:
+    method: POST
+    path: /step
+    body:
+      action_type: str    # see /tasks for valid action names
+      args: dict          # action-specific arguments
+
+  state:
+    method: GET
+    path: /state
+
+  tasks:
+    method: GET
+    path: /tasks
+
+  grader:
+    method: POST
+    path: /grader
+
+  baseline:
+    method: POST
+    path: /baseline
+
+observation_schema:
+  pipeline_status:    "idle | error | running | complete"
+  last_run_metrics:   "dict[str, float]"
+  error_log:          "list[str]"
+  visible_steps:      "list[str]  # steps revealed via inspect_step"
+  steps_taken:        int
+  max_steps:          int
+  action_history:     "list[ActionRecord]"
+  metric_warning:     "str | null"
+  inspected_configs:  "dict[str, any]  # populated after inspect_step"
+
+action_schema:
+  action_type: str    # required
+  args: dict          # optional, action-specific
+
+reward_range: [-inf, 1.15]
+reproducible: true
+seed_controls: [dataset, bug_injection]
