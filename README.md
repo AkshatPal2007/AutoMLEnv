@@ -13,6 +13,13 @@ tags:
 
 An OpenEnv-compliant environment where an LLM agent debugs broken machine learning pipelines. Designed for the **OpenEnv Hackathon** judged by Meta and Hugging Face.
 
+## What you submit
+
+- A GitHub repository containing this project
+- A Hugging Face Space deployed from the same codebase
+- A working Hugging Face token configured in the Space settings
+- A passing run of `python validate.py --url <your-space-url>`
+
 ---
 
 ## Overview
@@ -203,7 +210,7 @@ All graders are deterministic and reproducible (fixed seed).
 
 ---
 
-## Setup and Local Development
+## Local Run
 
 ### Requirements
 - Python 3.11+
@@ -211,42 +218,44 @@ All graders are deterministic and reproducible (fixed seed).
 
 ### Run locally
 
-```bash
-git clone <your-repo>
-cd automlenv
+1. Install the dependencies from `requirements.txt`.
+2. Start the FastAPI server with `uvicorn main:app`.
+3. Open the server in your browser and verify the root endpoint responds with `{"status":"ok"...}`.
+4. If you want to run the baseline agent, set your Hugging Face token in the environment first, then run `python inference.py`.
 
-pip install -r requirements.txt
+## Deploy to Hugging Face Spaces
 
-# Start the environment server
-uvicorn main:app --host 0.0.0.0 --port 8000
+Use these settings when creating the Space:
 
-# In a second terminal — run the baseline agent
-export API_BASE_URL=https://router.huggingface.co/v1
-export HF_TOKEN=your_token_here
-export MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct
-export ENV_BASE_URL=http://localhost:8000
-python inference.py
-```
+- SDK: `Docker`
+- Visibility: `Public`
+- Hardware: `CPU Basic`
+
+Then set these Space secrets/variables:
+
+- `HF_TOKEN` as a secret value
+- `API_BASE_URL=https://router.huggingface.co/v1`
+- `MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct`
 
 ### Run with Docker
 
-```bash
-docker build -t automlenv .
-docker run -p 7860:7860 \
-  -e HF_TOKEN=your_token \
-  -e MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct \
-  automlenv
-```
+Build the image from the project root and run it on port `7860`.
 
 ### Pre-submission validation
 
-```bash
-# With server running:
-python validate.py
+Run `python validate.py` locally while the server is running.
+Run `python validate.py --url <your-space-url>` against the deployed Hugging Face Space before you submit.
 
-# Against deployed HF Space:
-python validate.py --url https://your-space.hf.space
-```
+## Final Submission Checklist
+
+Before you click submit, confirm these items:
+
+1. The Space opens in a browser and shows `{"status":"ok"...}` at the root URL.
+2. `/reset`, `/step`, `/state`, `/tasks`, and `/grader` work on the deployed Space.
+3. `python validate.py --url https://your-space.hf.space` passes all checks.
+4. A valid Hugging Face token is set in the Space secrets for baseline calls.
+5. Your GitHub repository includes the latest `README.md`, `Dockerfile`, `main.py`, `environment.py`, `tasks.py`, `models.py`, `inference.py`, `validate.py`, and `openenv.yaml`.
+6. You submit the correct GitHub repo URL and the correct Hugging Face Space URL.
 
 ---
 
