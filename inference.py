@@ -113,37 +113,54 @@ SYSTEM_PROMPT = textwrap.dedent("""
 # ---------------------------------------------------------------------------
 
 def env_reset(task_id: int, seed: int = SEED) -> dict:
-    resp = requests.post(
-        f"{ENV_BASE_URL}/reset",
-        json={"task_id": task_id, "seed": seed},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
+    try:
+        resp = requests.post(
+            f"{ENV_BASE_URL}/reset",
+            json={"task_id": task_id, "seed": seed},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return {
+            "observation": {"pipeline_status": "error", "error_log": [f"Network Error: {str(e)}"]},
+            "done": True,
+            "reward": 0.0
+        }
 
 def env_step(action_type: str, args: dict) -> dict:
-    resp = requests.post(
-        f"{ENV_BASE_URL}/step",
-        json={"action_type": action_type, "args": args},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
+    try:
+        resp = requests.post(
+            f"{ENV_BASE_URL}/step",
+            json={"action_type": action_type, "args": args},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return {
+            "observation": {"pipeline_status": "error", "error_log": [f"Network Error: {str(e)}"]},
+            "done": True,
+            "reward": 0.0
+        }
 
 def env_grader() -> dict:
-    resp = requests.post(f"{ENV_BASE_URL}/grader", timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.post(f"{ENV_BASE_URL}/grader", timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return {"score": 0.0, "breakdown": {"error": f"Network Error: {str(e)}" }}
 
-
-def build_client() -> OpenAI:
+def build_client() -> OpenAI | None:
     if not API_KEY:
-        raise RuntimeError(
-            "HF_TOKEN (or API_KEY) is required to run inference.py and /baseline."
-        )
-    return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+        print("  [WARN] Missing HF_TOKEN/API_KEY. Running in fallback mode.")
+        return None
+    try:
+        return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    except Exception as e:
+        print(f"  [WARN] Failed to initialize OpenAI client: {e}")
+        return None
 
 
 def log_start(task_id: int) -> None:
@@ -269,22 +286,27 @@ def parse_action(response_text: str) -> tuple[str, dict]:
 # Single episode runner
 # ---------------------------------------------------------------------------
 
-def run_episode(client: OpenAI, task_id: int) -> float:
+def run_episode(client: OpenAI | None, task_id: int) -> float:
     """
     Run one full episode for the given task.
     Returns the grader score [0.0, 1.0+].
     """
     log_start(task_id)
 
-    result = env_reset(task_id, seed=SEED)
-    observation: dict = result.get("observation", result)
+    try:
+        result = env_reset(task_id, seed=SEED)
+        observation: dict = result.get("observation", result)
+    except Exception as exc:
+        observation = {"error_log": [str(exc)]}
+        result = {"done": True, "observation": observation}
 
     conversation: list = [
         {"role": "system", "content": SYSTEM_PROMPT},
     ]
 
+    done = result.get("done", False)
+
     for step in range(1, MAX_STEPS + 1):
-        done = result.get("done", False)
         if done:
             break
 
@@ -292,27 +314,33 @@ def run_episode(client: OpenAI, task_id: int) -> float:
         conversation.append({"role": "user", "content": user_prompt})
 
         # LLM call
-        try:
-            completion = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=conversation,
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS,
-                stream=False,
-            )
-            response_text: str = completion.choices[0].message.content or ""
-        except Exception as exc:
-            print(f"  [ERROR] LLM call failed: {exc}. Using fallback.")
+        response_text = ""
+        if client is None:
+            print("  [ERROR] No LLM client. Using fallback.")
             response_text = '{"action_type": "inspect_step", "args": {"step_name": "dataset"}}'
+        else:
+            try:
+                completion = client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=conversation,
+                    temperature=TEMPERATURE,
+                    max_tokens=MAX_TOKENS,
+                    stream=False,
+                )
+                response_text = completion.choices[0].message.content or ""
+            except Exception as exc:
+                print(f"  [ERROR] LLM call failed: {exc}. Using fallback.")
+                response_text = '{"action_type": "inspect_step", "args": {"step_name": "dataset"}}'
 
         # Keep assistant turn in conversation for multi-turn context
         conversation.append({"role": "assistant", "content": response_text})
 
         action_type, args = parse_action(response_text)
+        
         # Execute action in environment
         try:
             result = env_step(action_type, args)
-        except requests.HTTPError as exc:
+        except Exception:
             continue
 
         observation = result.get("observation", {})
@@ -320,9 +348,6 @@ def run_episode(client: OpenAI, task_id: int) -> float:
         done        = result.get("done", False)
 
         log_step(task_id, step, action_type, args, reward, done, observation)
-
-        if done:
-            break
 
     # Get grader score
     try:
@@ -346,7 +371,11 @@ def main() -> dict[str, float]:
     Run the baseline agent across all 3 tasks.
     Returns a dict of scores suitable for the /baseline endpoint.
     """
-    client = build_client()
+    try:
+        client = build_client()
+    except Exception as exc:
+        print(f"  [ERROR] Failed to initialize client: {exc}")
+        client = None
 
     scores: dict[str, float] = {}
 
@@ -355,13 +384,17 @@ def main() -> dict[str, float]:
         try:
             score = run_episode(client, task_id)
         except Exception as exc:
+            print(f"  [ERROR] Episode {task_id} unexpectedly failed: {exc}")
             score = 0.0
         scores[task_key] = round(score, 4)
 
-    aggregate = round(sum(scores.values()) / len(scores), 4)
+    aggregate = round(sum(scores.values()) / max(1, len(scores)), 4)
     scores["aggregate"] = aggregate
 
-    print(f"END {json.dumps({'scope': 'baseline', 'scores': scores}, sort_keys=True)}")
+    try:
+        print(f"END {json.dumps({'scope': 'baseline', 'scores': scores}, sort_keys=True)}")
+    except Exception:
+        pass
 
     return scores
 

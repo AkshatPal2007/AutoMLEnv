@@ -15,15 +15,13 @@ from typing import Optional
 
 import subprocess
 import sys
-from typing import Any, Dict
-
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from typing import Any, Dict, Optional
+from fastapi import FastAPI, HTTPException, Request
 
 from environment import AutoMLEnv
 from models import (
     Action, GraderResult, Observation,
-    ResetRequest, StepResult,
+    StepResult,
 )
 
 app = FastAPI(
@@ -53,18 +51,21 @@ def root():
 # ---------------------------------------------------------------------------
 
 @app.post("/reset", response_model=Observation)
-def reset(req: Optional[ResetRequest] = None) -> Observation:
+def reset(req: Optional[Dict[str, Any]] = None) -> Observation:
     """
     Start a new episode for task_id (1, 2, or 3).
     Returns the initial observation.
     """
     try:
-        task_id = req.task_id if req else 1
-        seed = req.seed if req else 42
+        task_id = 1
+        seed = 42
+        if req is not None:
+            task_id = int(req.get("task_id", 1))
+            seed = int(req.get("seed", 42))
 
         obs = _env.reset(task_id=task_id, seed=seed)
         return obs
-    except ValueError as exc:
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -81,7 +82,7 @@ def step(action: Action) -> StepResult:
     try:
         result = _env.step(action)
         return result
-    except RuntimeError as exc:
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -95,7 +96,9 @@ def state() -> Observation:
     try:
         return _env.state()
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -194,13 +197,19 @@ def grader() -> GraderResult:
     try:
         result = _env.grade()
         return GraderResult(
-            score=result["score"],
-            breakdown=result["breakdown"],
-            efficiency_bonus=result["efficiency_bonus"],
-            stability_bonus=result["stability_bonus"],
+            score=result.get("score", 0.0),
+            breakdown=result.get("breakdown", {}),
+            efficiency_bonus=result.get("efficiency_bonus", 0.0),
+            stability_bonus=result.get("stability_bonus", 0.0),
         )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        # Fallback to ensure structured response
+        return GraderResult(
+            score=0.0,
+            breakdown={"error": str(exc)},
+            efficiency_bonus=0.0,
+            stability_bonus=0.0,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -226,10 +235,14 @@ def baseline() -> Dict[str, Any]:
         scores = inference_mod.main()
         return {"status": "ok", "scores": scores}
 
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=500,
-            detail="inference.py not found. Place it in the project root.",
-        )
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {
+            "status": "error",
+            "scores": {
+                "task_1": 0.0,
+                "task_2": 0.0,
+                "task_3": 0.0,
+                "aggregate": 0.0
+            },
+            "detail": f"Failed to run inference: {str(exc)}"
+        }

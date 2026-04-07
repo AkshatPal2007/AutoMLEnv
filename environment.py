@@ -238,6 +238,7 @@ def _execute_cv(task: TaskConfig, n_folds: int) -> Tuple[Dict[str, float], List[
 
 class AutoMLEnv:
     def __init__(self) -> None:
+        self._initialized: bool = False
         self._task: Optional[TaskConfig] = None
         self._seed: int = 42
         self._steps_taken: int = 0
@@ -258,6 +259,7 @@ class AutoMLEnv:
     # ------------------------------------------------------------------
 
     def reset(self, task_id: int, seed: int = 42) -> Observation:
+        self._initialized = True
         self._task   = get_task(task_id, seed=seed)
         self._seed   = seed
         self._steps_taken    = 0
@@ -274,7 +276,7 @@ class AutoMLEnv:
         return self._build_observation()
 
     def step(self, action: Action) -> StepResult:
-        if self._task is None:
+        if not self._initialized or self._task is None:
             raise RuntimeError("Call reset() before step().")
         if self._episode_done:
             return StepResult(
@@ -331,7 +333,7 @@ class AutoMLEnv:
         )
 
     def state(self) -> Observation:
-        if self._task is None:
+        if not self._initialized or self._task is None:
             raise RuntimeError("Call reset() before state().")
         return self._build_observation()
 
