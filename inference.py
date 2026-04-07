@@ -24,7 +24,7 @@ from openai import OpenAI
 # ---------------------------------------------------------------------------
 
 API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY: str | None = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_KEY: str | None = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
 MODEL_NAME: str   = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
 LOCAL_IMAGE_NAME: str | None = os.getenv("LOCAL_IMAGE_NAME")
 
