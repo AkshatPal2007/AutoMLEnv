@@ -15,7 +15,6 @@ Uses the OpenAI client per competition rules.
 import os
 import json
 import textwrap
-from typing import Any
 
 import requests
 from openai import OpenAI
@@ -163,42 +162,19 @@ def build_client() -> OpenAI | None:
         return None
 
 
-def log_start(task_id: int) -> None:
-    payload = {
-        "task_id": task_id,
-        "seed": SEED,
-        "max_steps": MAX_STEPS,
-        "model": MODEL_NAME,
-        "api_base_url": API_BASE_URL,
-    }
-    if LOCAL_IMAGE_NAME:
-        payload["local_image_name"] = LOCAL_IMAGE_NAME
-    print(f"START {json.dumps(payload, sort_keys=True)}")
+def log_start(task_name: str) -> None:
+    print(f"[START] task={task_name}", flush=True)
 
 
-def log_step(task_id: int, step: int, action_type: str, args: dict, reward: float, done: bool, observation: dict) -> None:
-    metrics = observation.get("last_run_metrics", {})
-    payload = {
-        "task_id": task_id,
-        "step": step,
-        "action_type": action_type,
-        "args": args,
-        "reward": round(float(reward), 4),
-        "done": bool(done),
-        "pipeline_status": observation.get("pipeline_status"),
-        "metrics": metrics,
-        "errors": observation.get("error_log", []),
-    }
-    print(f"STEP {json.dumps(payload, sort_keys=True)}")
+def log_step(step_num: int, reward: float) -> None:
+    print(f"[STEP] step={step_num} reward={reward}", flush=True)
 
 
-def log_end(task_id: int, score: float, breakdown: dict[str, Any]) -> None:
-    payload = {
-        "task_id": task_id,
-        "score": round(float(score), 4),
-        "breakdown": breakdown,
-    }
-    print(f"END {json.dumps(payload, sort_keys=True)}")
+def log_end(task_name: str, final_score: float, total_steps: int) -> None:
+    print(
+        f"[END] task={task_name} score={final_score} steps={total_steps}",
+        flush=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +267,8 @@ def run_episode(client: OpenAI | None, task_id: int) -> float:
     Run one full episode for the given task.
     Returns the grader score [0.0, 1.0+].
     """
-    log_start(task_id)
+    task_name = f"task_{task_id}"
+    log_start(task_name)
 
     try:
         result = env_reset(task_id, seed=SEED)
@@ -305,6 +282,7 @@ def run_episode(client: OpenAI | None, task_id: int) -> float:
     ]
 
     done = result.get("done", False)
+    total_steps = 0
 
     for step in range(1, MAX_STEPS + 1):
         if done:
@@ -346,17 +324,21 @@ def run_episode(client: OpenAI | None, task_id: int) -> float:
         observation = result.get("observation", {})
         reward      = result.get("reward", 0.0)
         done        = result.get("done", False)
+        total_steps = step
 
-        log_step(task_id, step, action_type, args, reward, done, observation)
+        log_step(step, reward)
 
     # Get grader score
     try:
         grader_result = env_grader()
         score: float = float(grader_result.get("score", 0.0))
-        breakdown    = grader_result.get("breakdown", {})
-        log_end(task_id, score, breakdown)
+        if total_steps == 0:
+            total_steps = int(observation.get("steps_taken", 0))
+        log_end(task_name, score, total_steps)
     except Exception as exc:
-        log_end(task_id, 0.0, {"error": str(exc)})
+        if total_steps == 0:
+            total_steps = int(observation.get("steps_taken", 0))
+        log_end(task_name, 0.0, total_steps)
         score = 0.0
 
     return score
@@ -390,11 +372,6 @@ def main() -> dict[str, float]:
 
     aggregate = round(sum(scores.values()) / max(1, len(scores)), 4)
     scores["aggregate"] = aggregate
-
-    try:
-        print(f"END {json.dumps({'scope': 'baseline', 'scores': scores}, sort_keys=True)}")
-    except Exception:
-        pass
 
     return scores
 

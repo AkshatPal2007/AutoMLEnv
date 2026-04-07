@@ -11,12 +11,13 @@ Endpoints required by OpenEnv spec + competition:
 """
 
 from __future__ import annotations
-from typing import Optional
-
-import subprocess
-import sys
+import importlib.util
+import os
 from typing import Any, Dict, Optional
-from fastapi import FastAPI, HTTPException, Request
+
+from fastapi import Body, FastAPI, HTTPException
+from fastapi.requests import Request
+from fastapi.responses import JSONResponse
 
 from environment import AutoMLEnv
 from models import (
@@ -37,6 +38,20 @@ app = FastAPI(
 _env = AutoMLEnv()
 
 
+@app.exception_handler(RuntimeError)
+async def handle_runtime_error(_request: Request, exc: RuntimeError) -> JSONResponse:
+    if "Call reset() before" in str(exc):
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Environment not initialized."},
+        )
+
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
@@ -51,20 +66,17 @@ def root():
 # ---------------------------------------------------------------------------
 
 @app.post("/reset", response_model=Observation)
-def reset(req: Optional[Dict[str, Any]] = None) -> Observation:
+def reset(request: Optional[Dict[str, Any]] = Body(default=None)) -> Observation:
     """
     Start a new episode for task_id (1, 2, or 3).
     Returns the initial observation.
     """
     try:
-        task_id = 1
-        seed = 42
-        if req is not None:
-            task_id = int(req.get("task_id", 1))
-            seed = int(req.get("seed", 42))
+        payload = request or {}
+        task_id = int(payload.get("task_id", 1))
+        seed = int(payload.get("seed", 42))
 
-        obs = _env.reset(task_id=task_id, seed=seed)
-        return obs
+        return _env.reset(task_id=task_id, seed=seed)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -80,8 +92,9 @@ def step(action: Action) -> StepResult:
     Returns observation, reward, done, info.
     """
     try:
-        result = _env.step(action)
-        return result
+        return _env.step(action)
+    except RuntimeError:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -95,10 +108,10 @@ def state() -> Observation:
     """Return the current observation without advancing the episode."""
     try:
         return _env.state()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError:
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -226,10 +239,11 @@ def baseline() -> Dict[str, Any]:
     try:
         # Import and run directly (same process) for speed
         # inference.py must be in the same directory or on PYTHONPATH
-        import importlib.util, os
-
         inference_path = os.path.join(os.path.dirname(__file__), "inference.py")
         spec = importlib.util.spec_from_file_location("inference", inference_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Failed to load inference module spec.")
+
         inference_mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(inference_mod)
         scores = inference_mod.main()
