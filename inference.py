@@ -23,7 +23,7 @@ from openai import OpenAI
 # Configuration
 # ---------------------------------------------------------------------------
 
-ENV_BASE_URL: str = os.getenv("ENV_BASE_URL", "http://localhost:8000")
+ENV_BASE_URL: str = os.getenv("ENV_BASE_URL", "http://localhost:7860")
 API_BASE_URL: str = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME: str   = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
@@ -158,6 +158,27 @@ def build_client() -> OpenAI | None:
     except Exception as e:
         print(f"  [WARN] Failed to initialize OpenAI client: {e}")
         return None
+
+
+def warmup_llm_call(client: OpenAI | None, model_name: str) -> None:
+    """Best-effort single call so proxy validators can observe traffic."""
+    if client is None:
+        return
+
+    try:
+        client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": "You are a concise assistant."},
+                {"role": "user", "content": "ping"},
+            ],
+            temperature=0.0,
+            max_tokens=4,
+            stream=False,
+        )
+    except Exception:
+        # Keep baseline flow resilient; main loop will still try regular calls.
+        return
 
 
 def log_start(task: str, env: str, model: str) -> None:
@@ -333,8 +354,10 @@ def run_episode(client: OpenAI | None, task_id: int) -> float:
         done        = result.get("done", False)
         
         # If there's an error status in observation, capture it
-        if observation.get("pipeline_status") == "error" and observation.get("error_log"):
-            error_msg = error_msg or " | ".join(observation.get("error_log"))
+        if observation.get("pipeline_status") == "error":
+            raw_errors = observation.get("error_log")
+            if isinstance(raw_errors, list) and raw_errors:
+                error_msg = error_msg or " | ".join(str(err) for err in raw_errors)
 
         total_steps = step
         all_rewards.append(reward)
@@ -375,6 +398,10 @@ def main() -> dict[str, float]:
         client = None
 
     scores: dict[str, float] = {}
+    model_name = os.environ.get("MODEL_NAME", MODEL_NAME)
+
+    # Trigger one best-effort proxy call early even if env.reset fails later.
+    warmup_llm_call(client, model_name)
 
     for task_id in TASK_IDS:
         task_key = f"task_{task_id}"

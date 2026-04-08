@@ -95,7 +95,7 @@ flip_target_encoding
 
 **Deceptive signal:** After fixing bugs 1 & 2, accuracy jumps to 0.89 — looks great. But F1 stays at 0.67 and `metric_warning` fires. Bug 3 (leakage) still needs fixing.
 
-**Baseline score:** ~0.10 | **Perfect score:** ~1.10
+**Baseline score:** ~0.10 | **Perfect score:** 1.00
 
 ---
 
@@ -111,7 +111,7 @@ flip_target_encoding
 
 **Deceptive trap:** After fixing bugs 1–3, train F1 = 0.91 — looks perfect. True test F1 = 0.76. The agent must independently suspect and fix the eval split.
 
-**Baseline score:** ~0.50 | **Perfect score:** ~1.08
+**Baseline score:** ~0.50 | **Perfect score:** 1.00
 
 ---
 
@@ -128,7 +128,7 @@ flip_target_encoding
 
 **Short-term trap:** `apply_minmax_scaler(fit_on="full")` boosts R² by 0.08 immediately — but this is the leakage. Stability bonus penalises high-variance trajectories.
 
-**Baseline score:** ~0.21 | **Perfect score:** ~1.08
+**Baseline score:** ~0.21 | **Perfect score:** 1.00
 
 ---
 
@@ -172,6 +172,8 @@ Triggers `inference.py` across all 3 tasks. Returns:
 ## Grader Formulas
 
 All graders are deterministic and reproducible (fixed seed).
+
+Final grader scores are clamped to the range `[0.0, 1.0]`.
 
 ### Task 1 (Easy)
 | Criterion | Weight |
@@ -233,9 +235,13 @@ Use these settings when creating the Space:
 
 Then set these Space secrets/variables:
 
-- `HF_TOKEN` as a secret value
-- `API_BASE_URL=https://router.huggingface.co/v1`
-- `MODEL_NAME=meta-llama/Llama-3.1-8B-Instruct`
+- `HF_TOKEN` as a secret value (for your own manual baseline runs)
+
+Important for hackathon evaluation:
+
+- Do not permanently set `API_BASE_URL`, `API_KEY`, or `MODEL_NAME` in Space settings.
+- The evaluator injects proxy values for `API_BASE_URL` and `API_KEY` at runtime.
+- Hardcoding or pre-setting those variables can bypass the proxy and fail LLM criteria checks.
 
 ### Run with Docker
 
@@ -288,4 +294,4 @@ Scores achieved by `meta-llama/Llama-3.1-8B-Instruct` with no task-specific prom
 | Task 3 (Hard) | ~0.14 |
 | **Aggregate** | **~0.23** |
 
-A strong agent solving all bugs optimally achieves ~1.05–1.10 across tasks.
+A strong agent solving all bugs optimally achieves close to 1.00 across tasks.

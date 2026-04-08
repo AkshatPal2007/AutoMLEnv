@@ -76,6 +76,6 @@ action_schema:
   action_type: str    # required
   args: dict          # optional, action-specific
 
-reward_range: [-inf, 1.15]
+reward_range: [-inf, 1.0]
 reproducible: true
 seed_controls: [dataset, bug_injection]

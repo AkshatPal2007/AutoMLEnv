@@ -150,7 +150,7 @@ def check_tasks_and_graders() -> bool:
         results.append(check("GET /tasks reachable", False, str(exc)))
         return False
 
-    # Run grader for each task — score must be in [0.0, 1.15]
+    # Run grader for each task — score must be in [0.0, 1.0]
     for task_id in [1, 2, 3]:
         try:
             post("/reset", {"task_id": task_id, "seed": 42})
@@ -158,9 +158,9 @@ def check_tasks_and_graders() -> bool:
             r = post("/grader")
             results.append(check(f"POST /grader returns 200 (task {task_id})", r.status_code == 200))
             score = r.json().get("score", -1)
-            in_range = 0.0 <= score <= 1.15
+            in_range = 0.0 <= score <= 1.0
             results.append(check(
-                f"Grader score in [0.0, 1.15] (task {task_id})",
+                f"Grader score in [0.0, 1.0] (task {task_id})",
                 in_range,
                 f"got {score}",
             ))

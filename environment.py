@@ -607,8 +607,10 @@ class AutoMLEnv:
             stability_bonus = 0.0
         breakdown["stability_bonus"] = stability_bonus
 
-        total = round(min(base + efficiency_bonus + stability_bonus, 1.15), 4)
+        raw_total = base + efficiency_bonus + stability_bonus
+        total = round(min(max(raw_total, 0.0), 1.0), 4)
         breakdown["base_score"] = round(base, 4)
+        breakdown["raw_total_score"] = round(raw_total, 4)
         breakdown["total_score"] = total
         breakdown["grader_metrics"] = metrics
         breakdown["grader_errors"]  = errors
