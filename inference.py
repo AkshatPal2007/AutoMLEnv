@@ -25,7 +25,7 @@ from openai import OpenAI
 
 ENV_BASE_URL: str = os.getenv("ENV_BASE_URL", "http://localhost:8000")
 API_BASE_URL: str = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME: str   = os.environ.get("MODEL_NAME", "MiniMaxAI/MiniMax-M2.1")
+MODEL_NAME: str   = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
 MAX_STEPS:   int   = 20       # per task episode
 TEMPERATURE: float = 0.0      # deterministic for reproducibility
