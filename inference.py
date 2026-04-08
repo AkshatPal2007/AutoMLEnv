@@ -101,6 +101,7 @@ SYSTEM_PROMPT = textwrap.dedent("""
     Return ONLY valid JSON. No explanation, no markdown, no extra text.
 """).strip()
 
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
 
 # ---------------------------------------------------------------------------
 # Environment client helpers
