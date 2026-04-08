@@ -157,3 +157,4 @@ websockets==16.0
     # via
     #   openenv-core
     #   uvicorn
+numpy==1.26.4
