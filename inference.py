@@ -24,6 +24,8 @@ from openai import OpenAI
 # ---------------------------------------------------------------------------
 
 ENV_BASE_URL: str = os.getenv("ENV_BASE_URL", "http://localhost:8000")
+API_BASE_URL: str = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME: str   = os.environ.get("MODEL_NAME", "MiniMaxAI/MiniMax-M2.1")
 
 MAX_STEPS:   int   = 20       # per task episode
 TEMPERATURE: float = 0.0      # deterministic for reproducibility
@@ -101,8 +103,6 @@ SYSTEM_PROMPT = textwrap.dedent("""
     Return ONLY valid JSON. No explanation, no markdown, no extra text.
 """).strip()
 
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-
 # ---------------------------------------------------------------------------
 # Environment client helpers
 # ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ def env_grader() -> dict:
 
 def build_client() -> OpenAI | None:
     api_key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
-    api_base = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+    api_base = os.environ.get("API_BASE_URL", API_BASE_URL)
     if not api_key:
         print("  [WARN] Missing HF_TOKEN/API_KEY. Running in fallback mode.")
         return None
@@ -269,7 +269,7 @@ def run_episode(client: OpenAI | None, task_id: int) -> float:
     Returns the grader score [0.0, 1.0+].
     """
     task_name = f"task_{task_id}"
-    model_name = os.environ.get("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
+    model_name = os.environ.get("MODEL_NAME", MODEL_NAME)
     log_start(task=task_name, env="AutoMLEnv", model=model_name)
 
     try:
