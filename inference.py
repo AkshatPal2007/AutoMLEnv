@@ -147,23 +147,15 @@ def env_grader() -> dict:
     except Exception as e:
         return {"score": 0.0, "breakdown": {"error": f"Network Error: {str(e)}" }}
 
-def build_client() -> OpenAI | None:
-    api_key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
+def build_client() -> OpenAI:
+    api_key = os.environ["API_KEY"]
     api_base = os.environ.get("API_BASE_URL", API_BASE_URL)
-    if not api_key:
-        print("  [WARN] Missing HF_TOKEN/API_KEY. Running in fallback mode.")
-        return None
-    try:
-        return OpenAI(base_url=api_base, api_key=api_key)
-    except Exception as e:
-        print(f"  [WARN] Failed to initialize OpenAI client: {e}")
-        return None
+    print(f"  [DEBUG] LLM client: base_url={api_base}", flush=True)
+    return OpenAI(base_url=api_base, api_key=api_key)
 
 
-def warmup_llm_call(client: OpenAI | None, model_name: str) -> None:
+def warmup_llm_call(client: OpenAI, model_name: str) -> None:
     """Best-effort single call so proxy validators can observe traffic."""
-    if client is None:
-        return
 
     try:
         client.chat.completions.create(
@@ -284,7 +276,7 @@ def parse_action(response_text: str) -> tuple[str, dict]:
 # Single episode runner
 # ---------------------------------------------------------------------------
 
-def run_episode(client: OpenAI | None, task_id: int) -> float:
+def run_episode(client: OpenAI, task_id: int) -> float:
     """
     Run one full episode for the given task.
     Returns the grader score [0.0, 1.0+].
@@ -317,23 +309,18 @@ def run_episode(client: OpenAI | None, task_id: int) -> float:
         conversation.append({"role": "user", "content": user_prompt})
 
         # LLM call
-        response_text = ""
-        if client is None:
-            print("  [DEBUG] No LLM client. Using fallback.", flush=True)
+        try:
+            completion = client.chat.completions.create(
+                model=model_name,
+                messages=conversation,
+                temperature=TEMPERATURE,
+                max_tokens=MAX_TOKENS,
+                stream=False,
+            )
+            response_text = completion.choices[0].message.content or ""
+        except Exception as exc:
+            print(f"  [WARN] LLM call failed: {exc}", flush=True)
             response_text = '{"action_type": "inspect_step", "args": {"step_name": "dataset"}}'
-        else:
-            try:
-                completion = client.chat.completions.create(
-                    model=model_name,
-                    messages=conversation,
-                    temperature=TEMPERATURE,
-                    max_tokens=MAX_TOKENS,
-                    stream=False,
-                )
-                response_text = completion.choices[0].message.content or ""
-            except Exception as exc:
-                print(f"  [DEBUG] LLM call failed: {exc}. Using fallback.", flush=True)
-                response_text = '{"action_type": "inspect_step", "args": {"step_name": "dataset"}}'
 
         # Keep assistant turn in conversation for multi-turn context
         conversation.append({"role": "assistant", "content": response_text})
@@ -391,11 +378,7 @@ def main() -> dict[str, float]:
     Run the baseline agent across all 3 tasks.
     Returns a dict of scores suitable for the /baseline endpoint.
     """
-    try:
-        client = build_client()
-    except Exception as exc:
-        print(f"  [ERROR] Failed to initialize client: {exc}")
-        client = None
+    client = build_client()
 
     scores: dict[str, float] = {}
     model_name = os.environ.get("MODEL_NAME", MODEL_NAME)
