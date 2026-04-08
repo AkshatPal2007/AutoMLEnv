@@ -23,11 +23,6 @@ from openai import OpenAI
 # Configuration
 # ---------------------------------------------------------------------------
 
-API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY: str | None = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
-MODEL_NAME: str   = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
-LOCAL_IMAGE_NAME: str | None = os.getenv("LOCAL_IMAGE_NAME")
-
 ENV_BASE_URL: str = os.getenv("ENV_BASE_URL", "http://localhost:8000")
 
 MAX_STEPS:   int   = 20       # per task episode
@@ -152,11 +147,13 @@ def env_grader() -> dict:
         return {"score": 0.0, "breakdown": {"error": f"Network Error: {str(e)}" }}
 
 def build_client() -> OpenAI | None:
-    if not API_KEY:
+    api_key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
+    api_base = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+    if not api_key:
         print("  [WARN] Missing HF_TOKEN/API_KEY. Running in fallback mode.")
         return None
     try:
-        return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+        return OpenAI(base_url=api_base, api_key=api_key)
     except Exception as e:
         print(f"  [WARN] Failed to initialize OpenAI client: {e}")
         return None
@@ -271,7 +268,8 @@ def run_episode(client: OpenAI | None, task_id: int) -> float:
     Returns the grader score [0.0, 1.0+].
     """
     task_name = f"task_{task_id}"
-    log_start(task=task_name, env="AutoMLEnv", model=MODEL_NAME)
+    model_name = os.environ.get("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
+    log_start(task=task_name, env="AutoMLEnv", model=model_name)
 
     try:
         result = env_reset(task_id, seed=SEED)
@@ -304,7 +302,7 @@ def run_episode(client: OpenAI | None, task_id: int) -> float:
         else:
             try:
                 completion = client.chat.completions.create(
-                    model=MODEL_NAME,
+                    model=model_name,
                     messages=conversation,
                     temperature=TEMPERATURE,
                     max_tokens=MAX_TOKENS,
