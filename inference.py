@@ -21,12 +21,11 @@ from openai import OpenAI
 
 # ---------------------------------------------------------------------------
 # Configuration
+# NOTE: API_BASE_URL, API_KEY, and MODEL_NAME are read at CALL TIME inside
+#       build_client() so that env vars injected by the evaluation platform
+#       (Scaler LiteLLM proxy) are always picked up — even when this module
+#       is loaded via importlib from the /baseline endpoint.
 # ---------------------------------------------------------------------------
-
-API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY: str | None = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
-MODEL_NAME: str   = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
-LOCAL_IMAGE_NAME: str | None = os.getenv("LOCAL_IMAGE_NAME")
 
 ENV_BASE_URL: str = os.getenv("ENV_BASE_URL", "http://localhost:8000")
 
@@ -152,11 +151,26 @@ def env_grader() -> dict:
         return {"score": 0.0, "breakdown": {"error": f"Network Error: {str(e)}" }}
 
 def build_client() -> OpenAI | None:
-    if not API_KEY:
-        print("  [WARN] Missing HF_TOKEN/API_KEY. Running in fallback mode.")
+    """Build OpenAI client — reads env vars at CALL TIME, not import time.
+
+    Priority for the API key:  API_KEY  >  HF_TOKEN
+    This ensures that when the Scaler evaluation platform injects its own
+    API_BASE_URL and API_KEY, those values are used (routing through the
+    LiteLLM proxy).  For local dev / normal HF Spaces, HF_TOKEN is the
+    fallback.
+    """
+    api_base = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+    api_key  = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
+
+    print(f"  [INFO] build_client: API_BASE_URL={api_base}")
+    print(f"  [INFO] build_client: API_KEY={'set' if os.environ.get('API_KEY') else 'NOT SET'}")
+    print(f"  [INFO] build_client: HF_TOKEN={'set' if os.environ.get('HF_TOKEN') else 'NOT SET'}")
+
+    if not api_key:
+        print("  [WARN] Missing API_KEY and HF_TOKEN. Running in fallback mode.")
         return None
     try:
-        return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+        return OpenAI(base_url=api_base, api_key=api_key)
     except Exception as e:
         print(f"  [WARN] Failed to initialize OpenAI client: {e}")
         return None
@@ -298,8 +312,9 @@ def run_episode(client: OpenAI | None, task_id: int) -> float:
             response_text = '{"action_type": "inspect_step", "args": {"step_name": "dataset"}}'
         else:
             try:
+                model_name = os.environ.get("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
                 completion = client.chat.completions.create(
-                    model=MODEL_NAME,
+                    model=model_name,
                     messages=conversation,
                     temperature=TEMPERATURE,
                     max_tokens=MAX_TOKENS,
