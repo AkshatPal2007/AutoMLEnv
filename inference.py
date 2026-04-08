@@ -1,18 +1,15 @@
 """
 inference.py — AutoMLEnv Baseline Inference Script
 ===================================================
-MANDATORY environment variables (injected by the evaluation platform):
-    API_BASE_URL   The LiteLLM proxy endpoint
-    API_KEY        The API key for the proxy
-    MODEL_NAME     Model identifier (default: meta-llama/Llama-3.1-8B-Instruct)
+MANDATORY environment variables:
+    API_BASE_URL   The LLM API endpoint  (default: https://router.huggingface.co/v1)
+    MODEL_NAME     Model identifier
+    HF_TOKEN       Hugging Face / API key
 
 Runs the baseline agent against all 3 AutoMLEnv tasks and prints per-task
 scores plus an aggregate.  Also called by the /baseline FastAPI endpoint.
 
-STDOUT FORMAT (strict — parsed by the evaluator):
-    [START] task=<name> env=openenv model=<model>
-    [STEP]  step=<n> action=<type> reward=<.2f> done=<true|false> error=<msg|null>
-    [END]   success=<true|false> steps=<n> score=<.3f> rewards=<comma_sep>
+Uses the OpenAI client per competition rules.
 """
 
 import os
@@ -26,10 +23,15 @@ from openai import OpenAI
 # Configuration
 # ---------------------------------------------------------------------------
 
+API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+API_KEY: str | None = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
+MODEL_NAME: str   = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
+LOCAL_IMAGE_NAME: str | None = os.getenv("LOCAL_IMAGE_NAME")
+
 ENV_BASE_URL: str = os.getenv("ENV_BASE_URL", "http://localhost:8000")
 
-MAX_STEPS:   int   = 20
-TEMPERATURE: float = 0.0
+MAX_STEPS:   int   = 20       # per task episode
+TEMPERATURE: float = 0.0      # deterministic for reproducibility
 MAX_TOKENS:  int   = 512
 TASK_IDS:    list  = [1, 2, 3]
 SEED:        int   = 42
@@ -106,64 +108,76 @@ SYSTEM_PROMPT = textwrap.dedent("""
 
 
 # ---------------------------------------------------------------------------
-# Strict log functions (ONLY these print to stdout)
+# Environment client helpers
 # ---------------------------------------------------------------------------
+
+def env_reset(task_id: int, seed: int = SEED) -> dict:
+    try:
+        resp = requests.post(
+            f"{ENV_BASE_URL}/reset",
+            json={"task_id": task_id, "seed": seed},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return {
+            "observation": {"pipeline_status": "error", "error_log": [f"Network Error: {str(e)}"]},
+            "done": True,
+            "reward": 0.0
+        }
+
+def env_step(action_type: str, args: dict) -> dict:
+    try:
+        resp = requests.post(
+            f"{ENV_BASE_URL}/step",
+            json={"action_type": action_type, "args": args},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return {
+            "observation": {"pipeline_status": "error", "error_log": [f"Network Error: {str(e)}"]},
+            "done": True,
+            "reward": 0.0
+        }
+
+def env_grader() -> dict:
+    try:
+        resp = requests.post(f"{ENV_BASE_URL}/grader", timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return {"score": 0.0, "breakdown": {"error": f"Network Error: {str(e)}" }}
+
+def build_client() -> OpenAI | None:
+    if not API_KEY:
+        print("  [WARN] Missing HF_TOKEN/API_KEY. Running in fallback mode.")
+        return None
+    try:
+        return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    except Exception as e:
+        print(f"  [WARN] Failed to initialize OpenAI client: {e}")
+        return None
+
 
 def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def log_step(step: int, action: str, reward: float, done: bool, error) -> None:
+def log_step(step: int, action: str, reward: float, done: bool, error: str | None) -> None:
     error_val = error if error else "null"
     done_val = str(done).lower()
-    print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
 
 
-def log_end(success: bool, steps: int, score: float, rewards: list) -> None:
+def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
-
-
-# ---------------------------------------------------------------------------
-# Environment client helpers
-# ---------------------------------------------------------------------------
-
-def env_reset(task_id: int, seed: int = SEED) -> dict:
-    resp = requests.post(
-        f"{ENV_BASE_URL}/reset",
-        json={"task_id": task_id, "seed": seed},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def env_step(action_type: str, args: dict) -> dict:
-    resp = requests.post(
-        f"{ENV_BASE_URL}/step",
-        json={"action_type": action_type, "args": args},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def env_grader() -> dict:
-    resp = requests.post(f"{ENV_BASE_URL}/grader", timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
-
-# ---------------------------------------------------------------------------
-# OpenAI client — uses ONLY evaluator-injected env vars
-# ---------------------------------------------------------------------------
-
-def build_client() -> OpenAI:
-    """Build OpenAI client strictly from injected env vars. No fallbacks."""
-    return OpenAI(
-        base_url=os.environ["API_BASE_URL"],
-        api_key=os.environ["API_KEY"],
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +231,10 @@ def build_user_prompt(observation: dict) -> str:
 
 
 def parse_action(response_text: str) -> tuple[str, dict]:
-    """Extract action_type and args from the LLM response."""
+    """
+    Extract action_type and args from the LLM response.
+    Returns (action_type, args) or falls back to inspect_step("dataset").
+    """
     text = response_text.strip()
 
     # Strip markdown code fences if present
@@ -239,7 +256,8 @@ def parse_action(response_text: str) -> tuple[str, dict]:
     except (json.JSONDecodeError, AttributeError):
         pass
 
-    # Parse failure — return inspect_step as a safe action
+    # Last-resort fallback
+    print(f"  [WARN] Could not parse action from response: {response_text!r:.120}")
     return "inspect_step", {"step_name": "dataset"}
 
 
@@ -247,95 +265,97 @@ def parse_action(response_text: str) -> tuple[str, dict]:
 # Single episode runner
 # ---------------------------------------------------------------------------
 
-def run_episode(client: OpenAI, task_id: int) -> float:
+def run_episode(client: OpenAI | None, task_id: int) -> float:
     """
     Run one full episode for the given task.
     Returns the grader score [0.0, 1.0+].
     """
     task_name = f"task_{task_id}"
-    model_name = os.environ.get("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
-
-    rewards_list: list[float] = []
-    total_steps = 0
-    success = False
-
-    log_start(task=task_name, env="openenv", model=model_name)
+    log_start(task=task_name, env="AutoMLEnv", model=MODEL_NAME)
 
     try:
-        # Reset environment
         result = env_reset(task_id, seed=SEED)
-        # reset returns Observation directly (not wrapped)
-        if "observation" in result:
-            observation = result["observation"]
+        observation: dict = result.get("observation", result)
+    except Exception as exc:
+        observation = {"error_log": [str(exc)]}
+        result = {"done": True, "observation": observation}
+
+    conversation: list = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+    ]
+
+    done = result.get("done", False)
+    total_steps = 0
+    all_rewards = []
+    success = False
+
+    for step in range(1, MAX_STEPS + 1):
+        if done:
+            break
+
+        user_prompt = build_user_prompt(observation)
+        conversation.append({"role": "user", "content": user_prompt})
+
+        # LLM call
+        response_text = ""
+        if client is None:
+            print("  [DEBUG] No LLM client. Using fallback.", flush=True)
+            response_text = '{"action_type": "inspect_step", "args": {"step_name": "dataset"}}'
         else:
-            observation = result
+            try:
+                completion = client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=conversation,
+                    temperature=TEMPERATURE,
+                    max_tokens=MAX_TOKENS,
+                    stream=False,
+                )
+                response_text = completion.choices[0].message.content or ""
+            except Exception as exc:
+                print(f"  [DEBUG] LLM call failed: {exc}. Using fallback.", flush=True)
+                response_text = '{"action_type": "inspect_step", "args": {"step_name": "dataset"}}'
 
-        conversation: list = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-        ]
+        # Keep assistant turn in conversation for multi-turn context
+        conversation.append({"role": "assistant", "content": response_text})
 
-        done = result.get("done", False)
-
-        for step in range(1, MAX_STEPS + 1):
-            if done:
-                break
-
-            user_prompt = build_user_prompt(observation)
-            conversation.append({"role": "user", "content": user_prompt})
-
-            # LLM call — MUST go through the proxy, no fallback
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=conversation,
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS,
-                stream=False,
-            )
-            response_text = completion.choices[0].message.content or ""
-
-            # Keep assistant turn in conversation for multi-turn context
-            conversation.append({"role": "assistant", "content": response_text})
-
-            action_type, args = parse_action(response_text)
-
-            # Execute action in environment
+        action_type, args = parse_action(response_text)
+        action_str = f"{action_type}({json.dumps(args)})"
+        
+        # Execute action in environment
+        error_msg = None
+        try:
             result = env_step(action_type, args)
+        except Exception as e:
+            error_msg = str(e)
+            result = {"done": True, "reward": 0.0, "observation": observation}
 
-            observation = result.get("observation", {})
-            reward      = float(result.get("reward", 0.0))
-            done        = result.get("done", False)
-            total_steps = step
+        observation = result.get("observation", {})
+        reward      = result.get("reward", 0.0)
+        done        = result.get("done", False)
+        
+        # If there's an error status in observation, capture it
+        if observation.get("pipeline_status") == "error" and observation.get("error_log"):
+            error_msg = error_msg or " | ".join(observation.get("error_log"))
 
-            rewards_list.append(reward)
+        total_steps = step
+        all_rewards.append(reward)
 
-            # Get last error for log
-            error_log = observation.get("error_log", [])
-            last_error = error_log[-1] if error_log else None
+        log_step(step=step, action=action_str, reward=reward, done=done, error=error_msg)
 
-            log_step(
-                step=step,
-                action=action_type,
-                reward=reward,
-                done=done,
-                error=last_error,
-            )
-
-        # Get grader score
+    # Get grader score
+    try:
         grader_result = env_grader()
-        score = float(grader_result.get("score", 0.0))
-        success = True
-
-    except Exception:
+        score: float = float(grader_result.get("score", 0.0))
+        if total_steps == 0:
+            total_steps = int(observation.get("steps_taken", 0))
+        # Decide arbitrary success threshold (e.g. score >= 0.5)
+        success = score >= 0.5
+        log_end(success=success, steps=total_steps, score=score, rewards=all_rewards)
+    except Exception as exc:
+        if total_steps == 0:
+            total_steps = int(observation.get("steps_taken", 0))
+        log_end(success=False, steps=total_steps, score=0.0, rewards=all_rewards)
         score = 0.0
-        success = False
-
-    finally:
-        log_end(
-            success=success,
-            steps=total_steps,
-            score=score,
-            rewards=rewards_list,
-        )
 
     return score
 
@@ -349,12 +369,21 @@ def main() -> dict[str, float]:
     Run the baseline agent across all 3 tasks.
     Returns a dict of scores suitable for the /baseline endpoint.
     """
-    client = build_client()
+    try:
+        client = build_client()
+    except Exception as exc:
+        print(f"  [ERROR] Failed to initialize client: {exc}")
+        client = None
+
     scores: dict[str, float] = {}
 
     for task_id in TASK_IDS:
         task_key = f"task_{task_id}"
-        score = run_episode(client, task_id)
+        try:
+            score = run_episode(client, task_id)
+        except Exception as exc:
+            print(f"  [ERROR] Episode {task_id} unexpectedly failed: {exc}")
+            score = 0.0
         scores[task_key] = round(score, 4)
 
     aggregate = round(sum(scores.values()) / max(1, len(scores)), 4)
